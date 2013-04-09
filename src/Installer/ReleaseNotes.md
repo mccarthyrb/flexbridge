@@ -1,4 +1,6 @@
 ## DEV_VERSION_NUMBER: DEV_RELEASE_DATE
+Block Lift operations support.
+## 1.0.13: 09/Apr/2013
 Initial Beta release.
 
 ### Limitations
