@@ -45,6 +45,20 @@ namespace FLExBridge
 				return;
 			}
 
+			var options = ParseCommandLineArgs(args);
+			if (options.Count > 0)
+			{
+				switch (options["-v"])
+				{
+					case "obtain_lift":
+					case "view_notes_lift":
+					case "undo_export_lift":
+					case "move_lift":
+						MessageBox.Show("That Lift operation is not supported right now.", "Lift operation", MessageBoxButtons.OK, MessageBoxIcon.Hand);
+						return;
+				}
+			}
+
 			// An aggregate catalog that combines multiple catalogs
 			using (var catalog = new AggregateCatalog())
 			{
@@ -56,7 +70,6 @@ namespace FLExBridge
 				using (var container = new CompositionContainer(catalog))
 				{
 					var wantEndCall = false;
-					var options = ParseCommandLineArgs(args);
 					var bridgeTrafficCop = container.GetExportedValue<BridgeTrafficCop>();
 					try
 					{

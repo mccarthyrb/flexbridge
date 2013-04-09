@@ -15,7 +15,7 @@ using TriboroughBridge_ChorusPlugin.Properties;
 
 namespace SIL.LiftBridge.Controller
 {
-	[Export(typeof(IObtainProjectStrategy))]
+	// Blocked temorarily [Export(typeof(IObtainProjectStrategy))]
 	public class LiftObtainProjectStrategy : IObtainProjectStrategy
 	{
 		[ImportMany]
