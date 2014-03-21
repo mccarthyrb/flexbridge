@@ -8,6 +8,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text;
 using TriboroughBridge_ChorusPlugin.Properties;
 
 namespace TriboroughBridge_ChorusPlugin
@@ -30,6 +31,8 @@ namespace TriboroughBridge_ChorusPlugin
 		internal const string liftmodel = "-liftmodel";
 		internal const string pipeID = "-pipeID";
 		internal const string locale = "-locale";
+		internal const string noui = "-noui";
+		internal const string checkindescr = "-checkindescr";
 
 		internal const string obtain = "obtain";						// -p <$fwroot>
 		internal const string obtain_lift = "obtain_lift";				// -p <$fwroot>\foo where 'foo' is the project folder name
@@ -127,11 +130,13 @@ namespace TriboroughBridge_ChorusPlugin
 					throw new CommandLineException("-g", "is present");
 			}
 
-			// '-f' is required to NOT be present for any '-v' option cases, except 'send_receive'.
 			if (vOption != send_receive)
 			{
+				// '-f' is required to NOT be present for any '-v' option cases, except 'send_receive'.
 				if (commandLineArgs.ContainsKey(f))
 					throw new CommandLineException("-f", "is present");
+				if (commandLineArgs.ContainsKey(noui))
+					throw new CommandLineException("-noui", "is currently only available for " + send_receive);
 			}
 
 			string liftFolder;
@@ -178,6 +183,7 @@ namespace TriboroughBridge_ChorusPlugin
 					ValidatePOptionIsExtantFwDataFile(pOption);
 					// Must have -f option with fix it app in it.
 					ValidateFOptionIsExtantFixItFile(commandLineArgs[fwAppsDir], commandLineArgs[f]);
+					ValidateNouiOption(commandLineArgs);
 					break;
 
 				case send_receive_lift:
@@ -296,6 +302,29 @@ namespace TriboroughBridge_ChorusPlugin
 				throw new CommandLineException("-p", "has no fwdata file");
 			if (!File.Exists(pOption))
 				throw new CommandLineException("-p", "has no fwdata file");
+		}
+
+		private static void ValidateNouiOption(Dictionary<string, string> commandLineArgs)
+		{
+			string nouiOption;
+			if (!commandLineArgs.TryGetValue(noui, out nouiOption))
+				return;
+			var validNouiOptions = new HashSet<string>
+				{
+					"usb",
+					"internet",
+					"network"
+				};
+			if (!validNouiOptions.Contains(nouiOption))
+			{
+				var sb = new StringBuilder("must be ");
+				foreach (string validNouiOption in validNouiOptions)
+					sb.Append(validNouiOption).Append(", ");
+				string msg = sb.ToString();
+				throw new CommandLineException(noui, msg.Substring(0, msg.Length-2));
+			}
+			if (!commandLineArgs.ContainsKey(checkindescr))
+				throw new CommandLineException(checkindescr, "is required when " + noui + " is set");
 		}
 
 		private static void ValidatePOptionIsExtantFwXmlOrDb4oFile(string pOption)

@@ -4,13 +4,21 @@
 // Distributable under the terms of the MIT License, as specified in the license.rtf file.
 // --------------------------------------------------------------------------------------------
 
+using System;
 using System.Collections.Generic;
 using System.ComponentModel.Composition;
+using System.Diagnostics;
 using System.IO;
+using System.Threading;
 using System.Windows.Forms;
+using Chorus;
 using Chorus.UI.Sync;
+using Chorus.VcsDrivers;
+using Chorus.VcsDrivers.Mercurial;
+using Chorus.sync;
 using FLEx_ChorusPlugin.Infrastructure.DomainServices;
 using FLEx_ChorusPlugin.Properties;
+using Palaso.Progress;
 using TriboroughBridge_ChorusPlugin;
 using TriboroughBridge_ChorusPlugin.Infrastructure;
 
@@ -22,6 +30,8 @@ namespace FLEx_ChorusPlugin.Infrastructure.ActionHandlers
 	[Export(typeof(IBridgeActionTypeHandler))]
 	internal sealed class SendReceiveActionHandler : IBridgeActionTypeHandler, IBridgeActionTypeHandlerCallEndWork
 	{
+		private const int WAIT_CREATE_CH_REPO = 10000; // 10-sec wait for Chorus Hub to create a new repository
+
 		[Import]
 		private FLExConnectionHelper _connectionHelper;
 		private bool _gotChanges;
@@ -36,6 +46,7 @@ namespace FLEx_ChorusPlugin.Infrastructure.ActionHandlers
 		{
 			// -p <$fwroot>\foo\foo.fwdata
 			var projectDir = Path.GetDirectoryName(commandLineArgs["-p"]);
+			Debug.Assert(projectDir != null);
 			using (var chorusSystem = Utilities.InitializeChorusSystem(projectDir, commandLineArgs["-u"], FlexFolderSystem.ConfigureChorusProjectFolder))
 			{
 				var newlyCreated = false;
@@ -59,62 +70,118 @@ namespace FLEx_ChorusPlugin.Infrastructure.ActionHandlers
 					var origPathname = Path.Combine(projectDir, projectName + Utilities.FwXmlExtension);
 
 					// Do the Chorus business.
-					using (var syncDlg = (SyncDialog)chorusSystem.WinForms.CreateSynchronizationDialog(SyncUIDialogBehaviors.Lazy, SyncUIFeatures.NormalRecommended | SyncUIFeatures.PlaySoundIfSuccessful))
-					{
-						// The FlexBridgeSychronizerAdjunct class (implements ISychronizerAdjunct) handles the fwdata file splitting and restoring
-						// now.  'syncDlg' sees to it that the Synchronizer class ends up with FlexBridgeSychronizerAdjunct, and the Synchronizer
-						// class then calls one of the methods of the ISychronizerAdjunct interface right before the first Commit (local commit)
-						// call.  If two heads are merged, then the Synchoronizer class calls the second method of the ISychronizerAdjunct
-						// interface, (once for each pair of merged heads) so Flex Bridge can restore the fwdata file, AND, most importantly,
-						// produce any needed incompatible move conflict reports of the merge, which are then included in the post-merge commit.
-						var syncAdjunt = new FlexBridgeSychronizerAdjunct(origPathname, commandLineArgs["-f"], false);
-						syncDlg.SetSynchronizerAdjunct(syncAdjunt);
-
-						// Chorus does it in this order:
-						// Local Commit
-						// Pull
-						// Merge (Only if anything came in with the pull from other sources, and commit of merged results)
-						// Push
-						syncDlg.SyncOptions.DoPullFromOthers = true;
-						syncDlg.SyncOptions.DoMergeWithOthers = true;
-						syncDlg.SyncOptions.DoSendToOthers = true;
-						syncDlg.Text = Resources.SendReceiveView_DialogTitleFlexProject;
-						syncDlg.StartPosition = FormStartPosition.CenterScreen;
-						syncDlg.BringToFront();
-						var dlgResult = syncDlg.ShowDialog();
-
-						if (dlgResult == DialogResult.OK)
-						{
-							if (newlyCreated && (!syncDlg.SyncResult.Succeeded || syncDlg.SyncResult.ErrorEncountered != null))
-							{
-								_gotChanges = false;
-								// Wipe out new repo, since something bad happened in S/R,
-								// and we don't want to leave the user in a sad state (cf. LT-14751, LT-14957).
-								BackOutOfRepoCreation(projectDir);
-							}
-							else if (syncDlg.SyncResult.DidGetChangesFromOthers || syncAdjunt.WasUpdated)
-							{
-								_gotChanges = true;
-							}
-						}
-						else
-						{
-							// User probably bailed out of S/R using the "X" to close the dlg.
-							if (newlyCreated)
-							{
-								_gotChanges = false;
-								// Wipe out new repo, since the user cancelled without even trying the S/R,
-								// and we don't want to leave the user in a sad state (cf. LT-14751, LT-14957).
-								BackOutOfRepoCreation(projectDir);
-							}
-						}
-					}
+					if (!commandLineArgs.ContainsKey("-noui"))
+						DoChorusWithUI(chorusSystem, origPathname, commandLineArgs["-f"], projectDir, newlyCreated);
+					else
+						DoChorusWithoutUI(chorusSystem, origPathname, commandLineArgs, projectDir, newlyCreated);
 				}
 				finally
 				{
 					if (File.Exists(lockPathname))
 						File.Delete(lockPathname);
 				}
+			}
+		}
+
+		private void DoChorusWithUI(ChorusSystem chorusSystem, string origPathname, string fixitPathname, string projectDir, bool newlyCreated)
+		{
+			using (var syncDlg = (SyncDialog)chorusSystem.WinForms.CreateSynchronizationDialog(SyncUIDialogBehaviors.Lazy, SyncUIFeatures.NormalRecommended | SyncUIFeatures.PlaySoundIfSuccessful))
+			{
+				// The FlexBridgeSychronizerAdjunct class (implements ISychronizerAdjunct) handles the fwdata file splitting and restoring
+				// now.  'syncDlg' sees to it that the Synchronizer class ends up with FlexBridgeSychronizerAdjunct, and the Synchronizer
+				// class then calls one of the methods of the ISychronizerAdjunct interface right before the first Commit (local commit)
+				// call.  If two heads are merged, then the Synchoronizer class calls the second method of the ISychronizerAdjunct
+				// interface, (once for each pair of merged heads) so Flex Bridge can restore the fwdata file, AND, most importantly,
+				// produce any needed incompatible move conflict reports of the merge, which are then included in the post-merge commit.
+				var syncAdjunt = new FlexBridgeSychronizerAdjunct(origPathname, fixitPathname, false);
+				syncDlg.SetSynchronizerAdjunct(syncAdjunt);
+
+				// Chorus does it in this order:
+				// Local Commit
+				// Pull
+				// Merge (Only if anything came in with the pull from other sources, and commit of merged results)
+				// Push
+				syncDlg.SyncOptions.DoPullFromOthers = true;
+				syncDlg.SyncOptions.DoMergeWithOthers = true;
+				syncDlg.SyncOptions.DoSendToOthers = true;
+				syncDlg.Text = Resources.SendReceiveView_DialogTitleFlexProject;
+				syncDlg.StartPosition = FormStartPosition.CenterScreen;
+				syncDlg.BringToFront();
+				var dlgResult = syncDlg.ShowDialog();
+
+				if (dlgResult == DialogResult.OK)
+				{
+					ProcessComplete(syncDlg.SyncResult, projectDir, syncAdjunt, newlyCreated);
+				}
+				else
+				{
+					// User probably bailed out of S/R using the "X" to close the dlg.
+					if (newlyCreated)
+					{
+						_gotChanges = false;
+						// Wipe out new repo, since the user cancelled without even trying the S/R,
+						// and we don't want to leave the user in a sad state (cf. LT-14751, LT-14957).
+						BackOutOfRepoCreation(projectDir);
+					}
+				}
+			}
+		}
+
+		private void DoChorusWithoutUI(ChorusSystem chorusSystem, string origPathname, Dictionary<string, string> commandLineArgs, string projectDir, bool newlyCreated)
+		{
+			var syncOptions = new SyncOptions { DoPullFromOthers = true, DoMergeWithOthers = true, DoSendToOthers = true, CheckinDescription = commandLineArgs["-checkindescr"] };
+
+			switch (commandLineArgs["-noui"])
+			{
+				case "usb":
+					syncOptions.RepositorySourcesToTry.Add(RepositoryAddress.Create(RepositoryAddress.HardWiredSources.UsbKey, "USB flash drive", false));
+					break;
+				case "internet":
+					syncOptions.RepositorySourcesToTry.Add(chorusSystem.Repository.GetDefaultNetworkAddress<HttpRepositoryPath>());
+					break;
+				case "network":
+					syncOptions.RepositorySourcesToTry.Add(GetNetworkRepositoryAddress(chorusSystem.Repository));
+					break;
+				default:
+					throw new ArgumentException("commandLineArgs[\"-noui\"]");
+			}
+
+			var synchronizer = Synchronizer.FromProjectConfiguration(chorusSystem.ProjectFolderConfiguration, new NullProgress());
+			var syncAdjunct = new FlexBridgeSychronizerAdjunct(origPathname, commandLineArgs["-f"], false);
+			synchronizer.SynchronizerAdjunct = syncAdjunct;
+
+			SyncResults syncResults = synchronizer.SyncNow(syncOptions);
+			ProcessComplete(syncResults, projectDir, syncAdjunct, newlyCreated);
+		}
+
+		private RepositoryAddress GetNetworkRepositoryAddress(HgRepository repository)
+		{
+			var chorusHubClient = new ChorusHub.ChorusHubClient();
+			var chorusHubInfo = chorusHubClient.FindServer();
+
+			string directoryName = Path.GetFileName(repository.PathToRepo);
+			var doWait = chorusHubClient.PrepareHubToSync(directoryName, repository.Identifier);
+			if (doWait)
+				Thread.Sleep(WAIT_CREATE_CH_REPO);
+			RepositoryAddress address = new ChorusHubRepositorySource(chorusHubInfo.HostName,
+																																chorusHubInfo.GetHgHttpUri(RepositoryAddress.ProjectNameVariable), false,
+																																chorusHubClient.GetRepositoryInformation(null));
+
+			return address;
+		}
+
+		private void ProcessComplete(SyncResults syncResult, string projectDir, FlexBridgeSychronizerAdjunct syncAdjunt, bool newlyCreated)
+		{
+			if (newlyCreated && (!syncResult.Succeeded || syncResult.ErrorEncountered != null))
+			{
+				_gotChanges = false;
+				// Wipe out new repo, since something bad happened in S/R,
+				// and we don't want to leave the user in a sad state (cf. LT-14751, LT-14957).
+				BackOutOfRepoCreation(projectDir);
+			}
+			else if (syncResult.DidGetChangesFromOthers || syncAdjunt.WasUpdated)
+			{
+				_gotChanges = true;
 			}
 		}
 

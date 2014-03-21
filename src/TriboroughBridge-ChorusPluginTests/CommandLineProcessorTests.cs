@@ -288,6 +288,15 @@ namespace TriboroughBridge_ChorusPluginTests
 
 			Assert.DoesNotThrow(() => CommandLineProcessor.ValidateCommandLineArgs(_options), "Seems to not have the fwdata file");
 
+			//No UI option (currently only supported for send_receive)
+			_options[CommandLineProcessor.noui] = "bogus";
+			_options[CommandLineProcessor.checkindescr] = "sample checkin description";
+			Assert.Throws<CommandLineException>(() => CommandLineProcessor.ValidateCommandLineArgs(_options), "Seems to allow invalid value for noui");
+			_options[CommandLineProcessor.noui] = "usb";
+			Assert.DoesNotThrow(() => CommandLineProcessor.ValidateCommandLineArgs(_options), "Seems to not allow valid value for noui");
+			_options.Remove(CommandLineProcessor.checkindescr);
+			Assert.Throws<CommandLineException>(() => CommandLineProcessor.ValidateCommandLineArgs(_options), "Seems to allow missing value for checkindescr");
+
 			File.Delete(fooFwdataPathname);
 			_options[CommandLineProcessor.p] = fooFwdataPathname;
 			Assert.Throws<CommandLineException>(() => CommandLineProcessor.ValidateCommandLineArgs(_options), "Seems to have an fwdata file");
@@ -317,6 +326,11 @@ namespace TriboroughBridge_ChorusPluginTests
 
 			File.WriteAllText(Path.Combine(liftOffset, "Foo.lift"), "Some fake lift stuff");
 			Assert.DoesNotThrow(() => CommandLineProcessor.ValidateCommandLineArgs(_options), "Seems to not have the Lift file");
+
+			//No UI option (currently only supported for send_receive)
+			_options[CommandLineProcessor.noui] = "usb";
+			_options[CommandLineProcessor.checkindescr] = "sample checkin description";
+			Assert.Throws<CommandLineException>(() => CommandLineProcessor.ValidateCommandLineArgs(_options), "Seems to allow noui for an unsupported command");
 		}
 
 		[Test]
